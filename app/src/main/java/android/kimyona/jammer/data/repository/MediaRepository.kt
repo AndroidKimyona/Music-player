@@ -24,13 +24,14 @@ class MediaRepository(private val context: Context) {
     val favorites: LiveData<List<Track>> = db.trackDao().getFavorites()
 
     // v─── Scan ───v
+    // FIX: Removido clearAllTracks(). Agora faz upsert — mantém existentes,
+    // atualiza só o que foi escaneado. Não perde favoritos nem metadados.
 
     suspend fun scanLibrary(): Flow<ScanProgress> = flow {
         emit(ScanProgress.Running(0, 1))
         try {
             val scanned = scanner.scanAll()
 
-            db.trackDao().clearAllTracks()
             val entities = scanned.mapIndexed { index, scannedTrack ->
                 emit(ScanProgress.Running(index + 1, scanned.size))
                 Track(
@@ -64,7 +65,6 @@ class MediaRepository(private val context: Context) {
         try {
             val scanned = scanner.scanSAF(uri)
 
-            db.trackDao().clearAllTracks()
             val entities = scanned.mapIndexed { index, scannedTrack ->
                 emit(ScanProgress.Running(index + 1, scanned.size))
                 Track(

@@ -105,8 +105,8 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(tracks: List<Track>)
 
-    @Query("DELETE FROM tracks")
-    suspend fun clearAllTracks()
+    // @Query("DELETE FROM tracks")
+   // suspend fun clearAllTracks()
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(track: Track)

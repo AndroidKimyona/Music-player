@@ -3,10 +3,10 @@ package android.kimyona.jammer.ui.viewmodel
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.net.Uri
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.session.MediaControllerCompat
-import android.support.v4.media.session.PlaybackStateCompat
+import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.map
 import androidx.lifecycle.AndroidViewModel
@@ -23,18 +23,34 @@ import android.kimyona.jammer.data.repository.MediaRepository
 import android.kimyona.jammer.service.JammerPlaybackService
 
 /**
- * PlayerViewModel — BULLETPROOF EDITION.
+ * PlayerViewModel — SIMPLIFIED EDITION.
  *
- * Conecta com JammerPlaybackService via MediaBrowserCompat.
- * Expõe todos os LiveData que a UI precisa.
+ * Conecta com JammerPlaybackService via bind direto (LocalBinder).
+ * Remove MediaBrowserCompat / MediaControllerCompat quebrados.
  */
 class PlayerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = MediaRepository(application)
 
-    // ─── MediaBrowser / Controller ──────────────────────────────────────────
-    private var mediaBrowser: MediaBrowserCompat? = null
-    private var mediaController: MediaControllerCompat? = null
+    // ─── Service bind ───────────────────────────────────────────────────────
+    private var service: JammerPlaybackService? = null
+    private var serviceBound = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val localBinder = binder as JammerPlaybackService.LocalBinder
+            service = localBinder.getService()
+            serviceBound = true
+            Log.d("PlayerVM", "Service bound successfully")
+            updatePlaybackState()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            service = null
+            serviceBound = false
+            Log.w("PlayerVM", "Service disconnected")
+        }
+    }
 
     // ─── LiveData ───────────────────────────────────────────────────────────
     val allTracks: LiveData<List<Track>> = repository.allTracks
@@ -56,7 +72,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _queueTracks = MutableLiveData<List<Track>>(emptyList())
     val queueTracks: LiveData<List<Track>> = _queueTracks
-/** Tamanho atual da fila — exposto como LiveData para a UI observar. */
+
     val queueSize: LiveData<Int> = _queueTracks.map { it.size }
 
     private val _showMiniPlayer = MutableLiveData(false)
@@ -71,81 +87,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // ─── Position updater ───────────────────────────────────────────────────
 
     init {
-        connectMediaBrowser()
-    }
-
-    // ─── MediaBrowser connection ────────────────────────────────────────────
-
-    private fun connectMediaBrowser() {
-        try {
-            mediaBrowser = MediaBrowserCompat(
-                getApplication(),
-                ComponentName(getApplication(), JammerPlaybackService::class.java),
-                object : MediaBrowserCompat.ConnectionCallback() {
-                    override fun onConnected() {
-                        try {
-                            mediaBrowser?.sessionToken?.let { token ->
-                                mediaController = MediaControllerCompat(getApplication(), token)
-                                mediaController?.registerCallback(controllerCallback)
-                                updatePlaybackState()
-                            }
-                        } catch (e: Exception) {
-                            Log.e("PlayerVM", "MediaController init failed", e)
-                        }
-                    }
-
-                    override fun onConnectionFailed() {
-                        Log.e("PlayerVM", "MediaBrowser connection failed")
-                    }
-
-                    override fun onConnectionSuspended() {
-                        Log.w("PlayerVM", "MediaBrowser connection suspended")
-                    }
-                },
-                null
-            )
-            mediaBrowser?.connect()
-        } catch (e: Exception) {
-            Log.e("PlayerVM", "connectMediaBrowser failed", e)
-        }
-    }
-
-    private val controllerCallback = object : MediaControllerCompat.Callback() {
-override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
-    _isPlaying.postValue(state?.state == PlaybackStateCompat.STATE_PLAYING)
-    state?.position?.let { _currentPosition.postValue(it) }
-    
-    // Inicia/para updates baseado no estado
-    if (state?.state == PlaybackStateCompat.STATE_PLAYING) {
+        bindService()
         startPositionUpdates()
-    } else {
-        stopPositionUpdates()
     }
-}
 
-        override fun onMetadataChanged(metadata: android.support.v4.media.MediaMetadataCompat?) {
-            metadata?.let { meta ->
-                val path = meta.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_MEDIA_URI)
-                    ?: meta.getString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE)
-                if (path != null) {
-                    viewModelScope.launch {
-                        try {
-                            val track = repository.getTrackByPath(path)
-                            _currentTrack.postValue(track)
-                            _showMiniPlayer.postValue(track != null)
-                        } catch (e: Exception) {
-                            Log.e("PlayerVM", "Metadata lookup failed", e)
-                        }
-                    }
-                }
-            }
+    // ─── Service bind ─────────────────────────────────────────────────────────
+
+    private fun bindService() {
+        try {
+            val intent = Intent(getApplication(), JammerPlaybackService::class.java)
+            getApplication<Application>().bindService(
+                intent,
+                serviceConnection,
+                Context.BIND_AUTO_CREATE
+            )
+        } catch (e: Exception) {
+            Log.e("PlayerVM", "bindService failed", e)
         }
     }
 
     private fun updatePlaybackState() {
         try {
-            val state = mediaController?.playbackState
-            _isPlaying.value = state?.state == PlaybackStateCompat.STATE_PLAYING
+            _isPlaying.value = service?.isPlaying() ?: false
         } catch (e: Exception) {
             Log.e("PlayerVM", "updatePlaybackState error", e)
         }
@@ -155,12 +118,12 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
 
     fun playTrack(track: Track) {
         try {
-            // Envia Intent direto para o service em vez de playFromMediaId
-            val intent = android.content.Intent(getApplication(), JammerPlaybackService::class.java).apply {
+            // Envia Intent pro service (funciona mesmo sem bind)
+            val intent = Intent(getApplication(), JammerPlaybackService::class.java).apply {
                 action = JammerPlaybackService.ACTION_PLAY_SINGLE
                 putExtra(JammerPlaybackService.EXTRA_PATH, track.path)
             }
-            getApplication<android.app.Application>().startService(intent)
+            getApplication<Application>().startService(intent)
 
             _currentTrack.value = track
             _showMiniPlayer.value = true
@@ -171,40 +134,42 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
 
     fun togglePlayPause() {
         try {
-            if (_isPlaying.value == true) {
-                mediaController?.transportControls?.pause()
-            } else {
-                mediaController?.transportControls?.play()
-            }
+            service?.togglePlayPause()
+            _isPlaying.value = service?.isPlaying() ?: false
         } catch (e: Exception) {
             Log.e("PlayerVM", "togglePlayPause error", e)
         }
     }
 
     fun skipNext() {
-        try { mediaController?.transportControls?.skipToNext() }
-        catch (e: Exception) { Log.e("PlayerVM", "skipNext error", e) }
+        try {
+            service?.skipToNext()
+        } catch (e: Exception) {
+            Log.e("PlayerVM", "skipNext error", e)
+        }
     }
 
     fun skipPrevious() {
-        try { mediaController?.transportControls?.skipToPrevious() }
-        catch (e: Exception) { Log.e("PlayerVM", "skipPrevious error", e) }
+        try {
+            service?.skipToPrevious()
+        } catch (e: Exception) {
+            Log.e("PlayerVM", "skipPrevious error", e)
+        }
     }
 
     fun seekTo(positionMs: Long) {
-        try { mediaController?.transportControls?.seekTo(positionMs) }
-        catch (e: Exception) { Log.e("PlayerVM", "seekTo error", e) }
+        try {
+            service?.seekTo(positionMs)
+        } catch (e: Exception) {
+            Log.e("PlayerVM", "seekTo error", e)
+        }
     }
 
     fun toggleShuffle() {
         try {
             val newState = !(_shuffleEnabled.value ?: false)
             _shuffleEnabled.value = newState
-            // Notifica o service via custom action
-            mediaController?.transportControls?.sendCustomAction(
-                JammerPlaybackService.ACTION_SET_SHUFFLE,
-                android.os.Bundle().apply { putBoolean("enabled", newState) }
-            )
+            service?.setShuffle(newState)
         } catch (e: Exception) {
             Log.e("PlayerVM", "toggleShuffle error", e)
         }
@@ -219,9 +184,12 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
                 RepeatMode.ONE -> RepeatMode.NONE
             }
             _repeatMode.value = next
-            mediaController?.transportControls?.sendCustomAction(
-                JammerPlaybackService.ACTION_SET_REPEAT,
-                android.os.Bundle().apply { putInt("mode", next.ordinal) }
+            service?.setRepeat(
+                when (next) {
+                    RepeatMode.NONE -> JammerPlaybackService.RepeatMode.NONE
+                    RepeatMode.ALL -> JammerPlaybackService.RepeatMode.ALL
+                    RepeatMode.ONE -> JammerPlaybackService.RepeatMode.ONE
+                }
             )
         } catch (e: Exception) {
             Log.e("PlayerVM", "toggleRepeat error", e)
@@ -234,10 +202,7 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
         try {
             val current = _queueTracks.value ?: emptyList()
             _queueTracks.value = current + track
-            mediaController?.transportControls?.sendCustomAction(
-                JammerPlaybackService.ACTION_ADD_TO_QUEUE,
-                android.os.Bundle().apply { putString("path", track.path) }
-            )
+            service?.addToQueue(track.path)
         } catch (e: Exception) {
             Log.e("PlayerVM", "addToQueue error", e)
         }
@@ -269,10 +234,11 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
 
     fun clearQueue() {
         _queueTracks.value = emptyList()
-        mediaController?.transportControls?.sendCustomAction(
-            JammerPlaybackService.ACTION_CLEAR_QUEUE,
-            null
-        )
+        try {
+            service?.clearQueue()
+        } catch (e: Exception) {
+            Log.e("PlayerVM", "clearQueue error", e)
+        }
     }
 
     // ─── Favorites ──────────────────────────────────────────────────────────
@@ -400,52 +366,42 @@ override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
 
     fun getDuration(): Long {
         return try {
-            mediaController?.metadata?.getLong(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DURATION) ?: 0L
+            service?.getDuration() ?: 0L
         } catch (e: Exception) { 0L }
     }
 
-private var positionJob: kotlinx.coroutines.Job? = null
+    private var positionJob: kotlinx.coroutines.Job? = null
 
-private fun startPositionUpdates() {
-    positionJob?.cancel()
-    positionJob = viewModelScope.launch {
-        while (isActive) {
-            try {
-                val pos = mediaController?.playbackState?.position ?: 0L
-                _currentPosition.postValue(pos)
-            } catch (e: Exception) {
-                Log.e("PlayerVM", "Position update error", e)
+    private fun startPositionUpdates() {
+        positionJob?.cancel()
+        positionJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val pos = service?.getCurrentPosition() ?: 0L
+                    _currentPosition.postValue(pos)
+                    _isPlaying.postValue(service?.isPlaying() ?: false)
+                } catch (e: Exception) {
+                    Log.e("PlayerVM", "Position update error", e)
+                }
+                delay(1000)
             }
-            delay(1000)
         }
     }
-}
 
-private fun stopPositionUpdates() {
-    positionJob?.cancel()
-    positionJob = null
-}
+    override fun onCleared() {
+        positionJob?.cancel()
+        try {
+            if (serviceBound) {
+                getApplication<Application>().unbindService(serviceConnection)
+                serviceBound = false
+            }
+        } catch (_: Exception) {}
+        service = null
+        super.onCleared()
+    }
 
-override fun onCleared() {
-    stopPositionUpdates()
-    try {
-        mediaController?.unregisterCallback(controllerCallback)
-    } catch (_: Exception) {}
-    mediaController = null
-    try {
-        mediaBrowser?.disconnect()
-    } catch (_: Exception) {}
-    mediaBrowser = null
-    super.onCleared()
-}
+    // ─── Playlist playback ──────────────────────────────────────────────────
 
-    // ─── Enums ──────────────────────────────────────────────────────────────
-// ─── Playlist playback ──────────────────────────────────────────────────
-
-    /**
-     * Toca uma lista de tracks a partir de um índice específico.
-     * Substitui a queue atual e inicia playback.
-     */
     fun playPlaylist(tracks: List<Track>, startIndex: Int = 0) {
         viewModelScope.launch {
             try {

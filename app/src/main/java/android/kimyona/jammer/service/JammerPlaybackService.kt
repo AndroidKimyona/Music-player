@@ -1,32 +1,29 @@
 package android.kimyona.jammer.service
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
+import android.os.Binder
+import android.os.Build
+import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.session.LibraryResult
-import androidx.media3.session.MediaLibraryService
-import androidx.media3.session.MediaSession
-import androidx.media3.session.SessionCommand
-import androidx.media3.session.SessionResult
-import com.google.common.collect.ImmutableList
-import com.google.common.util.concurrent.Futures
-import com.google.common.util.concurrent.ListenableFuture
 import android.kimyona.jammer.ui.MainActivity
 
-class JammerPlaybackService : MediaLibraryService() {
+class JammerPlaybackService : Service() {
 
     private val TAG = "JammerService"
 
     private var player: ExoPlayer? = null
-    private var mediaLibrarySession: MediaLibrarySession? = null
 
     private var currentPlaylist = mutableListOf<String>()
     private var playbackOrder = mutableListOf<Int>()
@@ -36,81 +33,82 @@ class JammerPlaybackService : MediaLibraryService() {
     private var repeatMode = RepeatMode.NONE
     private var isShuffleEnabled = false
 
+    private val binder = LocalBinder()
+
     companion object {
         const val ACTION_SET_SHUFFLE = "android.kimyona.jammer.SET_SHUFFLE"
         const val ACTION_SET_REPEAT = "android.kimyona.jammer.SET_REPEAT"
         const val ACTION_CLEAR_QUEUE = "android.kimyona.jammer.CLEAR_QUEUE"
         const val ACTION_PLAY_SINGLE = "android.kimyona.jammer.PLAY_SINGLE"
+        const val ACTION_ADD_TO_QUEUE = "android.kimyona.jammer.ADD_TO_QUEUE"
         const val EXTRA_PATH = "path"
+        const val NOTIF_CHANNEL_ID = "jammer_playback"
+        const val NOTIF_ID = 1
     }
+
+    inner class LocalBinder : Binder() {
+        fun getService(): JammerPlaybackService = this@JammerPlaybackService
+    }
+
+    override fun onBind(intent: Intent): IBinder = binder
 
     // LIFECYCLE
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: ${intent?.action}")
-        if (intent?.action == ACTION_PLAY_SINGLE) {
-            val path = intent.getStringExtra(EXTRA_PATH)
-            if (path != null) {
-                playSingle(path)
+    override fun onCreate() {
+        super.onCreate()
+        Log.d(TAG, "onCreate")
+
+        createNotificationChannel()
+
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+
+        player?.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    onTrackEnded()
+                }
             }
-        }
-        return super.onStartCommand(intent, flags, startId)
+        })
+
+        startForeground(NOTIF_ID, buildNotification())
     }
 
-override fun onCreate() {
-    super.onCreate()
-    Log.d(TAG, "onCreate")
-
-    player = ExoPlayer.Builder(this)
-        .setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                .build(),
-            true
-        )
-        .setHandleAudioBecomingNoisy(true)
-        .build()
-
-    // Adiciona listener para detectar fim da track
-    player?.addListener(object : Player.Listener {
-        override fun onPlaybackStateChanged(state: Int) {
-            if (state == Player.STATE_ENDED) {
-                onTrackEnded()
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "onStartCommand: ${intent?.action}")
+        when (intent?.action) {
+            ACTION_PLAY_SINGLE -> {
+                val path = intent.getStringExtra(EXTRA_PATH)
+                if (path != null) playSingle(path)
             }
-            hasAudioFocus
-        } catch (e: Exception) {
-            Log.e(TAG, "requestAudioFocus error: ${e.message}")
-            false
+            ACTION_SET_SHUFFLE -> {
+                val enabled = intent.getBooleanExtra("enabled", false)
+                setShuffle(enabled)
+            }
+            ACTION_SET_REPEAT -> {
+                val modeOrdinal = intent.getIntExtra("mode", RepeatMode.NONE.ordinal)
+                setRepeat(RepeatMode.values()[modeOrdinal])
+            }
+            ACTION_CLEAR_QUEUE -> clearQueue()
+            ACTION_ADD_TO_QUEUE -> {
+                val path = intent.getStringExtra(EXTRA_PATH)
+                if (path != null) addToQueue(path)
+            }
         }
-    })
-
-    val sessionCallback = JammerSessionCallback()
-
-    mediaLibrarySession = MediaLibrarySession.Builder(this, player!!, sessionCallback)
-        .setSessionActivity(
-            PendingIntent.getActivity(
-                this,
-                0,
-                Intent(this, MainActivity::class.java)
-                    .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-                PendingIntent.FLAG_IMMUTABLE
-            )
-        )
-        .build()
-}
-
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? {
-        return mediaLibrarySession
+        return START_STICKY
     }
 
     override fun onDestroy() {
         Log.d(TAG, "onDestroy")
-        mediaLibrarySession?.run {
-            player?.release()
-            release()
-        }
-        mediaLibrarySession = null
+        player?.release()
         player = null
         super.onDestroy()
     }
@@ -156,6 +154,7 @@ override fun onCreate() {
             player?.setMediaItem(MediaItem.fromUri(uri))
             player?.prepare()
             player?.play()
+            updateNotification()
         } catch (e: Exception) {
             Log.e(TAG, "loadAndPlay error: ${e.message}", e)
         }
@@ -166,6 +165,7 @@ override fun onCreate() {
             player?.let {
                 if (it.isPlaying) it.pause() else it.play()
             }
+            updateNotification()
         } catch (e: Exception) {
             Log.e(TAG, "togglePlayPause error: ${e.message}")
         }
@@ -376,120 +376,39 @@ override fun onCreate() {
     } catch (e: Exception) { null }
     fun getCurrentIndex(): Int = currentPlaybackIndex
 
-    // SESSION CALLBACK
+    // NOTIFICATION
 
-    private inner class JammerSessionCallback : MediaLibrarySession.Callback {
-
-        override fun onAddMediaItems(
-            mediaSession: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            mediaItems: List<MediaItem>
-        ): ListenableFuture<List<MediaItem>> {
-            val updatedItems = mediaItems.map { item ->
-                val path = item.requestMetadata.mediaUri?.toString()
-                    ?: item.localConfiguration?.uri?.toString()
-                    ?: item.mediaId
-
-                item.buildUpon()
-                    .setUri(path)
-                    .setMediaId(path)
-                    .setMediaMetadata(
-                        MediaMetadata.Builder()
-                            .setTitle(item.mediaMetadata.title ?: "Unknown")
-                            .setArtist(item.mediaMetadata.artist ?: "Unknown Artist")
-                            .setAlbumTitle(item.mediaMetadata.albumTitle)
-                            .build()
-                    )
-                    .build()
-            }
-            return Futures.immediateFuture(updatedItems)
-        }
-
-        override fun onGetLibraryRoot(
-            session: MediaLibrarySession,
-            browser: MediaSession.ControllerInfo,
-            params: MediaLibraryService.LibraryParams?
-        ): ListenableFuture<LibraryResult<MediaItem>> {
-            val root = MediaItem.Builder()
-                .setMediaId("root")
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle("Jammer Library")
-                        .setIsBrowsable(true)
-                        .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                        .build()
-                )
-                .build()
-            return Futures.immediateFuture(LibraryResult.ofItem(root, params))
-        }
-
-        override fun onGetChildren(
-            session: MediaLibrarySession,
-            browser: MediaSession.ControllerInfo,
-            parentId: String,
-            page: Int,
-            pageSize: Int,
-            params: MediaLibraryService.LibraryParams?
-        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            return Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
-        }
-
-        override fun onGetItem(
-            session: MediaLibrarySession,
-            browser: MediaSession.ControllerInfo,
-            mediaId: String
-        ): ListenableFuture<LibraryResult<MediaItem>> {
-            val item = MediaItem.Builder()
-                .setMediaId(mediaId)
-                .setUri(mediaId)
-                .build()
-            return Futures.immediateFuture(LibraryResult.ofItem(item, null))
-        }
-
-        override fun onConnect(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo
-        ): MediaSession.ConnectionResult {
-            val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
-                .add(SessionCommand(ACTION_SET_SHUFFLE, Bundle.EMPTY))
-                .add(SessionCommand(ACTION_SET_REPEAT, Bundle.EMPTY))
-                .add(SessionCommand(ACTION_CLEAR_QUEUE, Bundle.EMPTY))
-                .add(SessionCommand("ACTION_ADD_TO_QUEUE", Bundle.EMPTY))
-                .build()
-
-            return MediaSession.ConnectionResult.accept(
-                sessionCommands,
-                MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                NOTIF_CHANNEL_ID,
+                "Jammer Playback",
+                NotificationManager.IMPORTANCE_LOW
             )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
         }
+    }
 
-        override fun onCustomCommand(
-            session: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            customCommand: SessionCommand,
-            args: Bundle
-        ): ListenableFuture<SessionResult> {
-            when (customCommand.customAction) {
-                ACTION_SET_SHUFFLE -> {
-                    val enabled = args.getBoolean("enabled", false)
-                    setShuffle(enabled)
-                }
-                ACTION_SET_REPEAT -> {
-                    val modeOrdinal = args.getInt("mode", RepeatMode.NONE.ordinal)
-                    val mode = RepeatMode.values()[modeOrdinal]
-                    setRepeat(mode)
-                }
-                ACTION_CLEAR_QUEUE -> {
-                    clearQueue()
-                }
-                "ACTION_ADD_TO_QUEUE" -> {
-                    val path = args.getString("path")
-                    if (path != null) {
-                        addToQueue(path)
-                    }
-                }
-            }
-            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+    private fun buildNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
+            .setContentTitle("Jammer")
+            .setContentText("Playing music")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun updateNotification() {
+        // TODO: atualizar com título/artista da música atual
+        startForeground(NOTIF_ID, buildNotification())
     }
 }
