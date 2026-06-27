@@ -1,43 +1,72 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout 
+<LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center"
-    android:padding="24dp"
-    android:background="@drawable/skeu_vinyl_black">
+    android:padding="16dp"
+    android:background="#1A1A1A">
 
-    <ImageView
-        android:id="@+id/ivCover"
-        android:layout_width="280dp"
-        android:layout_height="280dp"
-        android:src="@drawable/album_placeholder_vinyl"
-        android:scaleType="centerCrop" />
+    <!-- Album Art com sombra vinil -->
+    <FrameLayout
+        android:layout_width="260dp"
+        android:layout_height="260dp"
+        android:background="@drawable/skeu_vinyl_black"
+        android:padding="12dp">
 
+        <ImageView
+            android:id="@+id/ivCover"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:src="@drawable/album_placeholder_vinyl"
+            android:scaleType="centerCrop" />
+    </FrameLayout>
+
+    <!-- Track Info -->
     <TextView
         android:id="@+id/tvTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Unknown Title"
-        android:textSize="22sp"
-        android:textColor="@android:color/white"
-        android:layout_marginTop="16dp" />
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:textColor="#FFFFFF"
+        android:layout_marginTop="20dp"
+        android:maxLines="1"
+        android:ellipsize="end" />
 
     <TextView
         android:id="@+id/tvArtist"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Unknown Artist"
-        android:textSize="16sp"
-        android:textColor="@android:color/darker_gray"
-        android:layout_marginTop="4dp" />
+        android:textSize="14sp"
+        android:textColor="#D4A574"
+        android:layout_marginTop="4dp"
+        android:maxLines="1"
+        android:ellipsize="end" />
 
+    <TextView
+        android:id="@+id/tvAlbum"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text=""
+        android:textSize="12sp"
+        android:textColor="#888888"
+        android:layout_marginTop="2dp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <!-- SeekBar com tempos -->
     <SeekBar
         android:id="@+id/seekBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="24dp" />
+        android:layout_marginTop="24dp"
+        android:progressTint="#D4A574"
+        android:thumbTint="#D4A574" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -51,7 +80,7 @@
             android:layout_height="wrap_content"
             android:text="0:00"
             android:textSize="12sp"
-            android:textColor="@android:color/darker_gray" />
+            android:textColor="#AAAAAA" />
 
         <View
             android:layout_width="0dp"
@@ -64,38 +93,71 @@
             android:layout_height="wrap_content"
             android:text="0:00"
             android:textSize="12sp"
-            android:textColor="@android:color/darker_gray" />
+            android:textColor="#AAAAAA" />
     </LinearLayout>
 
+    <!-- Shuffle + Controls + Repeat -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginTop="16dp">
+        android:gravity="center_vertical"
+        android:layout_marginTop="20dp">
 
+        <!-- Shuffle -->
+        <ImageButton
+            android:id="@+id/btnShuffle"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_shuffle"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            app:tint="#888888"
+            android:contentDescription="Shuffle" />
+
+        <View android:layout_width="8dp" android:layout_height="0dp" />
+
+        <!-- Previous -->
         <ImageButton
             android:id="@+id/btnPrev"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:src="@drawable/ic_prev"
-            android:background="@drawable/button_round_metal" />
+            android:background="@drawable/button_round_metal"
+            android:contentDescription="Previous" />
 
+        <View android:layout_width="12dp" android:layout_height="0dp" />
+
+        <!-- Play/Pause -->
         <ImageButton
             android:id="@+id/btnPlayPause"
-            android:layout_width="80dp"
-            android:layout_height="80dp"
+            android:layout_width="72dp"
+            android:layout_height="72dp"
             android:src="@drawable/ic_play"
-            android:layout_marginStart="16dp"
-            android:layout_marginEnd="16dp"
-            android:background="@drawable/button_round_metal" />
+            android:background="@drawable/button_round_metal"
+            android:contentDescription="Play/Pause" />
 
+        <View android:layout_width="12dp" android:layout_height="0dp" />
+
+        <!-- Next -->
         <ImageButton
             android:id="@+id/btnNext"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:src="@drawable/ic_next"
-            android:background="@drawable/button_round_metal" />
+            android:background="@drawable/button_round_metal"
+            android:contentDescription="Next" />
 
+        <View android:layout_width="8dp" android:layout_height="0dp" />
+
+        <!-- Repeat -->
+        <ImageButton
+            android:id="@+id/btnRepeat"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:src="@drawable/ic_repeat"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            app:tint="#888888"
+            android:contentDescription="Repeat" />
     </LinearLayout>
 
 </LinearLayout>

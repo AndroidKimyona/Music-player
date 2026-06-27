@@ -1,58 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout
+<LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/skeu_metal_dark">
+    android:orientation="vertical"
+    android:background="#1A1A1A">
 
-    <LinearLayout
+    <TextView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:layout_height="wrap_content"
+        android:text="JAMMER LIBRARY"
+        android:textColor="#FF00FF"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:padding="16dp"
+        android:background="#000000" />
 
-        <SearchView
-            android:id="@+id/searchView"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:queryHint="Search tracks..."
-            android:background="@drawable/skeu_wood_light" />
+    <SearchView
+        android:id="@+id/searchView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:queryHint="Search..."
+        android:background="#333333" />
 
-        <TextView
-            android:id="@+id/tvScanStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Checking permissions..."
-            android:textSize="14sp"
-            android:textColor="@android:color/white"
-            android:gravity="center"
-            android:padding="12dp"
-            android:background="@drawable/skeu_neon_green" />
+    <com.google.android.material.chip.ChipGroup
+        android:id="@+id/chipGroupRating"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        app:singleSelection="true"
+        app:selectionRequired="true" />
 
-        <Button
-            android:id="@+id/btnAddFolder"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="+ ADD MUSIC FOLDER"
-            android:background="@drawable/button_round_metal"
-            android:textColor="@android:color/white"
-            android:layout_margin="8dp" />
+    <com.google.android.material.chip.ChipGroup
+        android:id="@+id/chipGroupReleaseType"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone"
+        app:singleSelection="true"
+        app:selectionRequired="true" />
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/recyclerLibrary"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
+    <TextView
+        android:id="@+id/tvScanStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Scanning..."
+        android:textColor="#00FF00"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:padding="8dp"
+        android:background="#000000" />
 
-    </LinearLayout>
+    <Button
+        android:id="@+id/btnAddFolder"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="+ ADD FOLDER"
+        android:textColor="#FFFFFF"
+        android:background="#444444" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/recyclerLibrary"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#FF0000" />
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/fabRescan"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
+        android:layout_gravity="center"
         android:layout_margin="16dp"
         android:src="@drawable/ic_play"
-        app:backgroundTint="@android:color/holo_green_dark" />
+        app:backgroundTint="#666666" />
 
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+</LinearLayout>

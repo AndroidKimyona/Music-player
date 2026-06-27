@@ -2,10 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="android.kimyona.jammer">
 
-    <!-- Permissões -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -19,7 +19,7 @@
         android:theme="@style/Theme.Material3.Dark.NoActionBar"
         android:requestLegacyExternalStorage="true">
 
-        <!-- Onboarding: tela inicial de boas-vindas -->
+        <!-- Onboarding: welcome screen -->
         <activity
             android:name=".ui.onboarding.OnboardingActivity"
             android:exported="true"
@@ -36,31 +36,35 @@
             android:exported="true"
             android:launchMode="singleTop" />
 
-        <!-- HTML Popup para tutoriais/FAQs -->
+        <!-- Player Activity (legacy) -->
+        <activity
+            android:name=".ui.PlayerActivity"
+            android:exported="false" />
+
+        <!-- HTML Popup for tutorials/FAQs -->
         <activity
             android:name=".ui.popup.HtmlPopupActivity"
             android:exported="false"
             android:theme="@style/Theme.Material3.Dark.NoActionBar" />
 
-        <!-- Playback Service em foreground -->
+        <!-- Settings Activity -->
+        <activity
+            android:name=".ui.settings.SettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.Dark.NoActionBar"
+            android:parentActivityName=".ui.MainActivity" />
+
+        <!-- foreground Playback Service -->
         <service
             android:name=".service.JammerPlaybackService"
             android:enabled="true"
-            android:exported="true"
+            android:exported="false"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService"/>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
-
-        <!-- Receiver para controles de mídia -->
-        <receiver
-            android:name="androidx.media.session.MediaButtonReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON" />
-            </intent-filter>
-        </receiver>
 
     </application>
 </manifest>

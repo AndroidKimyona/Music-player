@@ -9,6 +9,14 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * CrashReporter — BULLETPROOF EDITION.
+ *
+ * Correções:
+ * - NÃO mata o processo (deixa Android coletar nativamente)
+ * - Salva em filesDir (interno, sem permissão)
+ * - Try/catch no handler pra não dar loop infinito
+ */
 class CrashReporter(private val context: Context) {
 
     companion object {
@@ -16,24 +24,26 @@ class CrashReporter(private val context: Context) {
     }
 
     fun install() {
-        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
                 val reportFile = saveCrash(throwable)
                 Log.i(TAG, "Crash salvo em: ${reportFile.absolutePath}")
             } catch (e: Exception) {
                 Log.e(TAG, "Falha ao salvar crash report: ${e.message}")
             }
-            // Mata o processo pra não congelar o app
-            android.os.Process.killProcess(android.os.Process.myPid())
+            // Chama o handler padrão para que o Android colete o crash nativamente
+            // NÃO mata o processo manualmente
+            defaultHandler?.uncaughtException(thread, throwable)
         }
     }
 
     private fun saveCrash(throwable: Throwable): File {
         val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-        
-        // USA A PASTA PRIVADA DO APP — não precisa de permissão de storage
-        val crashDir = File(context.getExternalFilesDir(null), "Jammer/crash-reports").apply { mkdirs() }
-        
+
+        // PASTA INTERNA — não precisa de permissão de storage
+        val crashDir = File(context.filesDir, "crash-reports").apply { mkdirs() }
+
         val file = File(crashDir, "crash_$timestamp.json")
         val json = JSONObject().apply {
             put("device", Build.MODEL)

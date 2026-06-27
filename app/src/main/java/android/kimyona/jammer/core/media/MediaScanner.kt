@@ -3,7 +3,7 @@ package android.kimyona.jammer.core.media
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
-import android.os.Environment
+import android.os.Build
 import android.provider.MediaStore
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -11,10 +11,14 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Escaneia o celular e encontra todos os arquivos de midia.
- * API 35 compativel - usa paths corretos para Android 15.
+ * MediaScanner — BULLETPROOF + SAF-COMPATIBLE.
+ *
+ * Mudanças:
+ * - MediaStore é a fonte PRINCIPAL (funciona com READ_MEDIA_AUDIO, sem MANAGE_EXTERNAL_STORAGE)
+ * - Scan manual via File APENAS se tiver permissão total
+ * - SAF paths (content://) são resolvidos via ContentResolver
  */
- 
+
 class MediaScanner(private val context: Context) {
 
     companion object {
@@ -48,16 +52,109 @@ class MediaScanner(private val context: Context) {
         val extension: String,
         val isNative: Boolean,
         val needsFFmpeg: Boolean,
-        val isFromHiddenFolder: Boolean = false
+        val isFromHiddenFolder: Boolean = false,
+        val albumArtist: String? = null,
+        val genre: String? = null,
+        val year: Int? = null,
+        val trackNumber: Int? = null
     )
 
     suspend fun scanAll(onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Track> = withContext(Dispatchers.IO) {
         val tracks = mutableListOf<Track>()
+
+        // 1. MediaStore — funciona SEMPRE com READ_MEDIA_AUDIO
         tracks.addAll(scanMediaStore())
-        tracks.addAll(scanAllFolders(onProgress))
+        Log.i(TAG, "MediaStore found ${tracks.size} tracks")
+
+        // 2. Scan manual via File — SÓ se tiver permissão total (Android 10- ou MANAGE_EXTERNAL_STORAGE)
+        if (canScanFilesystem()) {
+            val rustBridge = RustBridge()
+            if (rustBridge.isLoaded) {
+                tracks.addAll(rustBridge.scanDirectories(arrayOf(getStorageRoot().absolutePath), arrayOf()).map { rustTrack ->
+                    Track(
+                        id = rustTrack.path.hashCode().toLong(),
+                        title = rustTrack.title ?: "Unknown Title",
+                        artist = rustTrack.artist ?: "Unknown Artist",
+                        album = rustTrack.album ?: "Unknown Album",
+                        path = rustTrack.path,
+                        duration = rustTrack.durationMs ?: 0L,
+                        extension = rustTrack.format?.lowercase() ?: rustTrack.path.substringAfterLast('.', "").lowercase(),
+                        isNative = true, // Assuming Rust handles native formats
+                        needsFFmpeg = false, // Assuming Rust handles decoding
+                        isFromHiddenFolder = false // Rust scanner should handle this
+                    )
+                })
+                Log.i(TAG, "Rust scanner found ${tracks.size} tracks")
+            } else {
+                tracks.addAll(scanAllFolders(onProgress))
+            }
+        } else {
+            Log.i(TAG, "Skipping filesystem scan — no MANAGE_EXTERNAL_STORAGE permission")
+        }
+
         val unique = tracks.distinctBy { it.path }
-        Log.i(TAG, "Total scanned: ${unique.size} files (${tracks.size - unique.size} duplicados removidos)")
+        Log.i(TAG, "Total: ${unique.size} unique tracks (${tracks.size - unique.size} duplicates)")
         unique
+    }
+
+    /**
+     * Scan via SAF (Storage Access Framework).
+     * Usa ContentResolver pra listar documentos na árvore URI.
+     */
+    suspend fun scanSAF(treeUri: Uri, onProgress: (Int, Int) -> Unit = { _, _ -> }): List<Track> = withContext(Dispatchers.IO) {
+        val tracks = mutableListOf<Track>()
+        val resolver = context.contentResolver
+
+        try {
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            )
+
+            val projection = arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE,
+                android.provider.DocumentsContract.Document.COLUMN_SIZE
+            )
+
+            resolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameCol = cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+
+                while (cursor.moveToNext()) {
+                    val docId = cursor.getString(idCol)
+                    val name = cursor.getString(nameCol)
+                    val ext = name.substringAfterLast('.', "").lowercase()
+
+                    if (ext !in ALL_EXTS) continue
+
+                    val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                    val formatInfo = SupportedFormats.getByExtension(ext)
+                    val (title, artist, album) = parseFilename(name.substringBeforeLast('.'))
+
+                    tracks.add(
+                        Track(
+                            id = docId.hashCode().toLong(),
+                            title = title,
+                            artist = artist,
+                            album = album,
+                            path = docUri.toString(),  // content:// URI!
+                            duration = 0L,
+                            extension = ext,
+                            isNative = formatInfo?.isNative ?: false,
+                            needsFFmpeg = formatInfo?.needsFFmpeg ?: false,
+                            isFromHiddenFolder = false
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "SAF scan failed: ${e.message}", e)
+        }
+
+        Log.i(TAG, "SAF scan found ${tracks.size} tracks")
+        tracks
     }
 
     private fun scanMediaStore(): List<Track> {
@@ -75,7 +172,8 @@ class MediaScanner(private val context: Context) {
             MediaStore.MediaColumns.ARTIST,
             MediaStore.MediaColumns.ALBUM,
             MediaStore.MediaColumns.DATA,
-            MediaStore.MediaColumns.DURATION
+            MediaStore.MediaColumns.DURATION,
+            MediaStore.MediaColumns.DISPLAY_NAME
         )
 
         context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
@@ -85,10 +183,12 @@ class MediaScanner(private val context: Context) {
             val albumCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.ALBUM)
             val pathCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DURATION)
+            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
 
             while (cursor.moveToNext()) {
                 val path = cursor.getString(pathCol) ?: continue
-                val ext = path.substringAfterLast('.', "").lowercase()
+                val ext = cursor.getString(nameCol)?.substringAfterLast('.', "")?.lowercase()
+                    ?: path.substringAfterLast('.', "").lowercase()
                 val formatInfo = SupportedFormats.getByExtension(ext)
 
                 result.add(
@@ -112,16 +212,20 @@ class MediaScanner(private val context: Context) {
     }
 
     /**
-     * Scaneia TODAS as pastas manualmente.
-     * API 35: usa context.getExternalFilesDir(null)?.parentFile como fallback.
+     * Scan manual via File — só funciona com MANAGE_EXTERNAL_STORAGE ou API < 30.
      */
     private fun scanAllFolders(onProgress: (Int, Int) -> Unit): List<Track> {
         val result = mutableListOf<Track>()
         val root = getStorageRoot()
-        
-        Log.i(TAG, "Scanning ALL folders in: ${root.absolutePath}")
+
+        if (!root.exists() || !root.canRead()) {
+            Log.w(TAG, "Cannot read storage root: ${root.absolutePath}")
+            return result
+        }
+
+        Log.i(TAG, "Scanning filesystem: ${root.absolutePath}")
         val allDirs = findAllDirectories(root)
-        Log.i(TAG, "Found ${allDirs.size} directories to scan")
+        Log.i(TAG, "Found ${allDirs.size} directories")
 
         var nextId = -1L
         var trackCount = 0
@@ -153,34 +257,33 @@ class MediaScanner(private val context: Context) {
                 )
                 trackCount++
             }
-            
-            // Reporta progresso a cada 5 pastas ou no final
+
             if (index % 5 == 0 || index == totalDirs - 1) {
                 onProgress(index + 1, totalDirs)
             }
         }
 
-        Log.i(TAG, "Found $trackCount tracks in all folders")
+        Log.i(TAG, "Filesystem scan: $trackCount tracks")
         return result
     }
 
-    /**
-     * API 35: retorna o path correto do armazenamento interno.
-     */
+    private fun canScanFilesystem(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            true  // API < 30 não precisa de MANAGE_EXTERNAL_STORAGE
+        }
+    }
+
     private fun getStorageRoot(): File {
-        // Tenta o path padrao do Android
         val standardPath = File("/storage/emulated/0")
-        if (standardPath.exists() && standardPath.isDirectory) {
+        if (standardPath.exists() && standardPath.isDirectory && standardPath.canRead()) {
             return standardPath
         }
-
-        // Fallback: usa o diretorio de files do app pra deduzir o path
         val fallback = context.getExternalFilesDir(null)?.parentFile?.parentFile?.parentFile
         if (fallback != null && fallback.exists()) {
             return fallback
         }
-
-        // Ultimo recurso
         return File("/sdcard")
     }
 
@@ -196,15 +299,12 @@ class MediaScanner(private val context: Context) {
             for (child in children) {
                 if (!child.isDirectory) continue
                 val name = child.name
-
                 if (name in SYSTEM_FOLDERS) continue
                 if (name == "cache" || name == "files" || name == "databases") continue
-
                 all.add(child)
                 stack.add(child)
             }
         }
-
         return all
     }
 

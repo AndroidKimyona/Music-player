@@ -1,6 +1,6 @@
 package android.kimyona.jammer.core.media
 
-import android.kimyona.jammer.data.entity.Track
+import android.kimyona.jammer.core.media.MediaScanner.Track
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -66,14 +66,18 @@ class RustBridge {
                 val path = obj.getString("path")
                 if (path in exclude) continue
                 tracks.add(Track(
-                    path = path,
+                    id = path.hashCode().toLong(),
                     title = obj.optString("title", "Unknown Title"),
                     artist = obj.optString("artist", "Unknown Artist"),
                     album = obj.optString("album", "Unknown Album"),
-                    durationMs = obj.optLong("duration_ms", 0),
-                    format = obj.optString("format", "UNKNOWN"),
-                    artistsJoined = obj.optString("artist", null),
-                    genresJoined = null,
+                    path = path,
+                    duration = obj.optLong("duration_ms", 0),
+                    extension = obj.optString("format", "UNKNOWN").lowercase(),
+                    isNative = true,
+                    needsFFmpeg = false,
+                    isFromHiddenFolder = false,
+                    albumArtist = obj.optString("album_artist", null),
+                    genre = obj.optString("genre", null),
                     year = obj.optInt("year", 0).takeIf { it > 0 },
                     trackNumber = obj.optInt("track_number", 0).takeIf { it > 0 }
                 ))

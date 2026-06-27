@@ -1,6 +1,10 @@
 <resources>
     <style name="Theme.Jammer" parent="Theme.Material3.Dark.NoActionBar">
-        <item name="colorPrimary">@color/teal_200</item>
+        <item name="colorPrimary">#D4A574</item>
+        <item name="colorPrimaryDark">#1A1A1A</item>
+        <item name="colorAccent">#D4A574</item>
         <item name="android:statusBarColor">#1A1A1A</item>
+        <item name="android:navigationBarColor">#1A1A1A</item>
+        <item name="android:windowBackground">#1A1A1A</item>
     </style>
 </resources>

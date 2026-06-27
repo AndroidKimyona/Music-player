@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/miniPlayer"
+    android:layout_width="match_parent"
+    android:layout_height="64dp"
+    android:orientation="horizontal"
+    android:background="#2A2A2A"
+    android:gravity="center_vertical"
+    android:paddingStart="12dp"
+    android:paddingEnd="12dp"
+    android:elevation="8dp"
+    android:visibility="gone"
+    android:clickable="true"
+    android:focusable="true">
+
+    <!-- Album Art -->
+    <ImageView
+        android:id="@+id/ivMiniCover"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/album_placeholder"
+        android:scaleType="centerCrop" />
+
+    <!-- Track Info -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="12dp">
+
+        <TextView
+            android:id="@+id/tvMiniTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Unknown Title"
+            android:textSize="14sp"
+            android:textColor="#FFFFFF"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvMiniArtist"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Unknown Artist"
+            android:textSize="12sp"
+            android:textColor="#888888"
+            android:maxLines="1"
+            android:ellipsize="end" />
+    </LinearLayout>
+
+    <!-- Controls -->
+    <ImageButton
+        android:id="@+id/btnMiniPrev"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:src="@drawable/ic_prev"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        app:tint="#FFFFFF"
+        android:contentDescription="Previous" />
+
+    <ImageButton
+        android:id="@+id/btnMiniPlayPause"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/ic_play"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        app:tint="#D4A574"
+        android:contentDescription="Play/Pause" />
+
+    <ImageButton
+        android:id="@+id/btnMiniNext"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:src="@drawable/ic_next"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        app:tint="#FFFFFF"
+        android:contentDescription="Next" />
+
+</LinearLayout>

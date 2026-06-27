@@ -2,312 +2,139 @@ package android.kimyona.jammer.data.repository
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import android.util.Log
-import androidx.documentfile.provider.DocumentFile
-import android.kimyona.jammer.core.ffmpeg.FFmpegWrapper
-import android.kimyona.jammer.core.media.MediaScanner
-import android.kimyona.jammer.core.media.RustBridge
-import android.kimyona.jammer.core.media.SupportedFormats
-import android.kimyona.jammer.data.JammerDatabase
-import android.kimyona.jammer.data.entity.Track
+import androidx.lifecycle.LiveData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
-import java.io.File
+import android.kimyona.jammer.data.JammerDatabase
+import android.kimyona.jammer.data.entity.ContentRating
+import android.kimyona.jammer.data.entity.ReleaseType
+import android.kimyona.jammer.data.entity.Track
+import android.kimyona.jammer.core.media.MediaScanner
 
-class MediaRepository(
-    private val context: Context,
-    private val db: JammerDatabase,
-    private val rustBridge: RustBridge
-) {
-    private val TAG = "JammerScan"
-    private val ffmpeg = FFmpegWrapper()
+class MediaRepository(private val context: Context) {
 
-    val allTracks = db.trackDao().getAll()
-    val favorites = db.trackDao().getFavorites()
+    private val db = JammerDatabase.getDatabase(context)
+    private val scanner = MediaScanner(context)
 
-    /**
-     * Scan principal: tenta MediaStore, depois fallback manual, depois Rust.
-     */
-    fun scanLibrary(): Flow<ScanProgress> = flow {
-        emit(ScanProgress.Starting)
-        Log.d(TAG, "=== scanLibrary() STARTED ===")
+    val allTracks: LiveData<List<Track>> = db.trackDao().getAll()
+    val favorites: LiveData<List<Track>> = db.trackDao().getFavorites()
 
-        val tracks = withContext(Dispatchers.IO) {
-            try {
-                // 1. MediaStore
-                Log.d(TAG, "Step 1: Scanning MediaStore...")
-                val mediaStoreTracks = scanMediaStore()
-                Log.d(TAG, "MediaStore found: ${mediaStoreTracks.size} tracks")
-                emit(ScanProgress.MediaStoreDone(mediaStoreTracks.size))
+    // v─── Scan ───v
+    // FIX: Removido clearAllTracks(). Agora faz upsert — mantém existentes,
+    // atualiza só o que foi escaneado. Não perde favoritos nem metadados.
 
-                // 2. Manual fallback
-                val manualTracks = if (mediaStoreTracks.isEmpty()) {
-                    Log.d(TAG, "Step 2: MediaStore empty, scanning manual folders...")
-                    scanManualFolders()
-                } else {
-                    Log.d(TAG, "Step 2: Skipping manual scan (MediaStore found tracks)")
-                    emptyList()
-                }
-                Log.d(TAG, "Manual scan found: ${manualTracks.size} tracks")
+    suspend fun scanLibrary(): Flow<ScanProgress> = flow {
+        emit(ScanProgress.Running(0, 1))
+        try {
+            val scanned = scanner.scanAll()
 
-                // 3. Rust scanner
-                Log.d(TAG, "Step 3: Running Rust scanner...")
-                val rustTracks = scanWithRust(
-                    (mediaStoreTracks + manualTracks).map { it.path }.toTypedArray()
+            val entities = scanned.mapIndexed { index, scannedTrack ->
+                emit(ScanProgress.Running(index + 1, scanned.size))
+                Track(
+                    path = scannedTrack.path,
+                    title = scannedTrack.title,
+                    artist = scannedTrack.artist,
+                    album = scannedTrack.album,
+                    durationMs = scannedTrack.duration,
+                    format = scannedTrack.extension.uppercase(),
+                    dateAdded = System.currentTimeMillis(),
+                    albumArtist = scannedTrack.albumArtist,
+                    genre = scannedTrack.genre,
+                    year = scannedTrack.year,
+                    trackNumber = scannedTrack.trackNumber
                 )
-                Log.d(TAG, "Rust scan found: ${rustTracks.size} tracks")
-
-                // 4. Merge
-                val merged = (mediaStoreTracks + manualTracks + rustTracks)
-                    .distinctBy { it.path }
-                    .sortedBy { it.title.lowercase() }
-
-                Log.d(TAG, "Total unique tracks: ${merged.size}")
-
-                if (merged.isNotEmpty()) {
-                    Log.d(TAG, "Inserting ${merged.size} tracks into database...")
-                    db.trackDao().insertAll(merged)
-                    Log.d(TAG, "Database insert complete")
-                } else {
-                    Log.w(TAG, "No tracks found anywhere!")
-                }
-
-                merged
-            } catch (e: Exception) {
-                Log.e(TAG, "CRITICAL ERROR in scanLibrary: ${e.message}", e)
-                emptyList()
             }
-        }
 
-        emit(ScanProgress.Complete(tracks.size))
-        Log.d(TAG, "=== scanLibrary() COMPLETE: ${tracks.size} tracks ===")
+            withContext(Dispatchers.IO) {
+                db.trackDao().insertAll(entities)
+            }
+
+            emit(ScanProgress.Done(entities.size))
+        } catch (e: Exception) {
+            Log.e("MediaRepository", "Scan failed: ${e.message}", e)
+            emit(ScanProgress.Error(e.message ?: "Unknown error"))
+        }
     }.flowOn(Dispatchers.IO)
 
-    private fun scanMediaStore(): List<Track> {
-        val tracks = mutableListOf<Track>()
-        val uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-
-        val projection = arrayOf(
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.TITLE,
-            MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.ALBUM,
-            MediaStore.Audio.Media.DURATION,
-            MediaStore.Audio.Media.DATA,
-            MediaStore.Audio.Media.MIME_TYPE,
-            MediaStore.Audio.Media.YEAR,
-            MediaStore.Audio.Media.TRACK
-        )
-
+    suspend fun scanSAF(uri: Uri): Flow<ScanProgress> = flow {
+        emit(ScanProgress.Running(0, 1))
         try {
-            Log.d(TAG, "Querying MediaStore...")
-            context.contentResolver.query(
-                uri, projection, null, null,
-                MediaStore.Audio.Media.DATE_ADDED + " DESC"
-            )?.use { cursor ->
-                Log.d(TAG, "MediaStore cursor count: ${cursor.count}")
-                if (cursor.count == 0) return@use
+            val scanned = scanner.scanSAF(uri)
 
-                val pathIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
-                val titleIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
-                val artistIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
-                val albumIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
-                val durationIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
-                val yearIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
-                val trackIdx = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
-
-                while (cursor.moveToNext()) {
-                    val path = cursor.getString(pathIdx) ?: continue
-                    val format = path.substringAfterLast('.', "UNKNOWN").uppercase()
-
-                    tracks.add(Track(
-                        path = path,
-                        title = cursor.getString(titleIdx) ?: "Unknown Title",
-                        artist = cursor.getString(artistIdx) ?: "Unknown Artist",
-                        album = cursor.getString(albumIdx) ?: "Unknown Album",
-                        durationMs = cursor.getLong(durationIdx),
-                        format = format,
-                        year = cursor.getInt(yearIdx).takeIf { it > 0 },
-                        trackNumber = cursor.getInt(trackIdx).takeIf { it > 0 }
-                    ))
-                }
+            val entities = scanned.mapIndexed { index, scannedTrack ->
+                emit(ScanProgress.Running(index + 1, scanned.size))
+                Track(
+                    path = scannedTrack.path,
+                    title = scannedTrack.title,
+                    artist = scannedTrack.artist,
+                    album = scannedTrack.album,
+                    durationMs = scannedTrack.duration,
+                    format = scannedTrack.extension.uppercase(),
+                    dateAdded = System.currentTimeMillis(),
+                    albumArtist = scannedTrack.albumArtist,
+                    genre = scannedTrack.genre,
+                    year = scannedTrack.year,
+                    trackNumber = scannedTrack.trackNumber
+                )
             }
+
+            withContext(Dispatchers.IO) {
+                db.trackDao().insertAll(entities)
+            }
+
+            emit(ScanProgress.Done(entities.size))
         } catch (e: Exception) {
-            Log.e(TAG, "MediaStore query failed: ${e.message}", e)
+            Log.e("MediaRepository", "SAF scan failed: ${e.message}", e)
+            emit(ScanProgress.Error(e.message ?: "Unknown error"))
         }
+    }.flowOn(Dispatchers.IO)
 
-        return tracks
-    }
+    // v─── Queries ───v
 
-    /**
-     * Escaneia pastas de música conhecidas, incluindo subdiretórios (max 3 níveis).
-     */
-    private fun scanManualFolders(): List<Track> {
-        val commonPaths = listOf(
-            "/storage/emulated/0/Music",
-            "/storage/emulated/0/.Music",
-            "/storage/emulated/0/Download",
-            "/storage/emulated/0/Audio",
-            "/sdcard/Music",
-            "/sdcard/.Music",
-            "/sdcard/Download"
-        )
+    fun searchTracks(query: String): LiveData<List<Track>> =
+        db.trackDao().search("%$query%")
 
-        val audioExts = setOf("opus", "ogg", "mp3", "flac", "m4a", "aac", "wav", "wma", "mid", "midi")
-        val allTracks = mutableListOf<Track>()
+    fun getByContentRating(rating: ContentRating): LiveData<List<Track>> =
+        db.trackDao().getByContentRating(rating.name)
 
-        for (path in commonPaths) {
-            val dir = File(path)
-            if (!dir.exists() || !dir.isDirectory) {
-                Log.d(TAG, "Path does not exist: $path")
-                continue
-            }
+    fun getByReleaseType(type: ReleaseType): LiveData<List<Track>> =
+        db.trackDao().getByReleaseType(type.name)
 
-            Log.d(TAG, "Scanning path: $path")
-            try {
-                val count = scanDirectoryRecursive(dir, audioExts, allTracks, 0)
-                Log.d(TAG, "  Found $count tracks in $path")
-            } catch (e: SecurityException) {
-                Log.w(TAG, "No access to $path: ${e.message}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error scanning $path: ${e.message}")
-            }
-        }
+    fun searchByContentRating(query: String, rating: ContentRating): LiveData<List<Track>> =
+        db.trackDao().searchByContentRating("%$query%", rating.name)
 
-        Log.d(TAG, "Manual scan total: ${allTracks.size} tracks")
-        return allTracks
-    }
+    fun searchByReleaseType(query: String, type: ReleaseType): LiveData<List<Track>> =
+        db.trackDao().searchByReleaseType("%$query%", type.name)
 
-    /**
-     * Escaneia diretório recursivamente com limite de profundidade.
-     * Retorna número de tracks encontrados nesta branch.
-     */
-    private fun scanDirectoryRecursive(
-        dir: File,
-        audioExts: Set<String>,
-        tracks: MutableList<Track>,
-        depth: Int
-    ): Int {
-        if (depth > 3) {
-            Log.d(TAG, "  Max depth reached at: ${dir.path}")
-            return 0
-        }
+    // v─── Metadata writers ───v
 
-        var count = 0
-        try {
-            val files = dir.listFiles()
-            if (files == null) {
-                Log.w(TAG, "  Cannot list: ${dir.path} (null)")
-                return 0
-            }
+    suspend fun setAlias(path: String, alias: String?) =
+        db.trackDao().setAlias(path, alias)
 
-            for (file in files) {
-                if (file.isFile) {
-                    val ext = file.extension.lowercase()
-                    if (ext in audioExts) {
-                        val (title, artist, album) = parseFilename(file.nameWithoutExtension)
-                        tracks.add(Track(
-                            path = file.absolutePath,
-                            title = title,
-                            artist = artist,
-                            album = album,
-                            durationMs = 0L,
-                            format = ext.uppercase(),
-                            year = null,
-                            trackNumber = null
-                        ))
-                        count++
-                    }
-                } else if (file.isDirectory) {
-                    count += scanDirectoryRecursive(file, audioExts, tracks, depth + 1)
-                }
-            }
-        } catch (e: SecurityException) {
-            Log.w(TAG, "  SecurityException: ${dir.path}")
-        }
+    suspend fun setContentRating(path: String, rating: ContentRating) =
+        db.trackDao().setContentRating(path, rating.name)
 
-        return count
-    }
+    suspend fun setReleaseType(path: String, type: ReleaseType?) =
+        db.trackDao().setReleaseType(path, type?.name)
 
-    private fun parseFilename(filename: String): Triple<String, String, String> {
-        var clean = filename.replace(Regex("""^\d+[.\s-]+"""), "")
-        val parts = clean.split(" - ", limit = 3)
+    suspend fun setArtistsJoined(path: String, artistsJoined: String?) =
+        db.trackDao().setArtistsJoined(path, artistsJoined)
 
-        return when (parts.size) {
-            3 -> Triple(parts[2], parts[0], parts[1])
-            2 -> Triple(parts[1], parts[0], "Unknown Album")
-            else -> Triple(clean, "Unknown Artist", "Unknown Album")
-        }
-    }
+    suspend fun toggleFavorite(path: String, current: Boolean) =
+        db.trackDao().setFavorite(path, !current)
 
-    /**
-     * Scan via Rust para pastas que MediaStore não indexa.
-     */
-    private suspend fun scanWithRust(excludePaths: Array<String>): List<Track> {
-        val dirsToScan = listOf(
-            "/storage/emulated/0/Music",
-            "/storage/emulated/0/.Music",
-            "/storage/emulated/0/Download"
-        ).filter { File(it).exists() }.toTypedArray()
+    suspend fun getTrackByPath(path: String): Track? =
+        db.trackDao().getByPath(path)
 
-        return if (dirsToScan.isNotEmpty()) {
-            rustBridge.scanDirectories(dirsToScan, excludePaths)
-        } else emptyList()
-    }
-
-    /**
-     * Scan via SAF (Storage Access Framework).
-     */
-    fun scanWithSAF(treeUri: Uri): List<Track> {
-        val tracks = mutableListOf<Track>()
-        val audioExts = setOf("opus", "ogg", "mp3", "flac", "m4a", "aac", "wav", "wma", "mid", "midi")
-
-        val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return tracks
-
-        fun scanDocument(doc: DocumentFile, depth: Int = 0) {
-            if (depth > 3) return
-            if (doc.isDirectory) {
-                doc.listFiles()?.forEach { scanDocument(it, depth + 1) }
-            } else {
-                val ext = doc.name?.substringAfterLast('.', "")?.lowercase() ?: ""
-                if (ext in audioExts) {
-                    tracks.add(Track(
-                        path = doc.uri.toString(),
-                        title = doc.name ?: "Unknown",
-                        artist = "Unknown Artist",
-                        album = "Unknown Album",
-                        durationMs = 0L,
-                        format = ext.uppercase()
-                    ))
-                }
-            }
-        }
-
-        scanDocument(tree)
-        Log.d(TAG, "SAF scan: ${tracks.size} tracks")
-        return tracks
-    }
-
-    fun searchTracks(query: String) = db.trackDao().search("%$query%")
-
-    suspend fun toggleFavorite(path: String) {
-        val track = db.trackDao().getByPath(path) ?: return
-        db.trackDao().setFavorite(path, !track.isFavorite)
-    }
-
-    suspend fun clearDatabase() {
-        db.trackDao().deleteAll()
-        db.queueDao().clear()
-    }
+    // ─── Sealed class para progresso de scan ───
 
     sealed class ScanProgress {
-        object Starting : ScanProgress()
-        data class MediaStoreDone(val count: Int) : ScanProgress()
-        data class Complete(val total: Int) : ScanProgress()
+        data class Running(val current: Int, val total: Int) : ScanProgress()
+        data class Done(val count: Int) : ScanProgress()
+        data class Error(val message: String) : ScanProgress()
     }
 }

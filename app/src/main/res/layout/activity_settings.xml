@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#1A1A1A">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="#2A2A2A" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- Seção: Biblioteca -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="BIBLIOTECA"
+                android:textSize="12sp"
+                android:textColor="#D4A574"
+                android:textStyle="bold"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="12dp"
+                android:background="#2A2A2A">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Auto-scan"
+                        android:textSize="16sp"
+                        android:textColor="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Escanear automaticamente ao abrir"
+                        android:textSize="12sp"
+                        android:textColor="#888888" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/switchAutoScan"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnClearLibrary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Limpar Biblioteca"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="#FF4444"
+                android:textColor="#FFFFFF" />
+
+            <!-- Seção: Geral -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="GERAL"
+                android:textSize="12sp"
+                android:textColor="#D4A574"
+                android:textStyle="bold"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="8dp" />
+
+            <Button
+                android:id="@+id/btnResetOnboarding"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Reiniciar Onboarding"
+                android:backgroundTint="#555555"
+                android:textColor="#FFFFFF" />
+
+            <Button
+                android:id="@+id/btnAbout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sobre o Jammer"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="#D4A574"
+                android:textColor="#1A1A1A" />
+
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

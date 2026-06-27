@@ -4,411 +4,411 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
+import android.app.Service
 import android.content.Intent
-import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Binder
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Bundle
-import android.os.Looper
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
-import androidx.media.MediaBrowserServiceCompat
-import androidx.media.session.MediaButtonReceiver
-import com.google.android.exoplayer2.ExoPlayer
-import com.google.android.exoplayer2.MediaItem
-import com.google.android.exoplayer2.Player
-import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
-import android.kimyona.jammer.R
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import android.kimyona.jammer.ui.MainActivity
-import java.io.File
 
-class JammerPlaybackService : MediaBrowserServiceCompat() {
+class JammerPlaybackService : Service() {
 
     private val TAG = "JammerService"
-    private val NOTIFICATION_ID = 1
-    private val CHANNEL_ID = "jammer_playback"
 
     private var player: ExoPlayer? = null
-    private var mediaSession: MediaSessionCompat? = null
-    private var mediaSessionConnector: MediaSessionConnector? = null
+
+    private var currentPlaylist = mutableListOf<String>()
+    private var playbackOrder = mutableListOf<Int>()
+    private var currentPlaybackIndex = 0
+
+    enum class RepeatMode { NONE, ALL, ONE }
+    private var repeatMode = RepeatMode.NONE
+    private var isShuffleEnabled = false
+
     private val binder = LocalBinder()
 
-    private val positionHandler = Handler(Looper.getMainLooper())
-    private var positionRunnable: Runnable? = null
-    private var currentPlaylist = mutableListOf<String>()
-    private var currentIndex = 0
-
     companion object {
+        const val ACTION_SET_SHUFFLE = "android.kimyona.jammer.SET_SHUFFLE"
+        const val ACTION_SET_REPEAT = "android.kimyona.jammer.SET_REPEAT"
+        const val ACTION_CLEAR_QUEUE = "android.kimyona.jammer.CLEAR_QUEUE"
         const val ACTION_PLAY_SINGLE = "android.kimyona.jammer.PLAY_SINGLE"
-        const val ACTION_PLAY_LIST = "android.kimyona.jammer.PLAY_LIST"
-        const val ACTION_TOGGLE = "android.kimyona.jammer.TOGGLE"
-        const val ACTION_SKIP_NEXT = "android.kimyona.jammer.SKIP_NEXT"
-        const val ACTION_SKIP_PREV = "android.kimyona.jammer.SKIP_PREV"
-        const val ACTION_SEEK = "android.kimyona.jammer.SEEK"
+        const val ACTION_ADD_TO_QUEUE = "android.kimyona.jammer.ADD_TO_QUEUE"
+        const val EXTRA_PATH = "path"
+        const val NOTIF_CHANNEL_ID = "jammer_playback"
+        const val NOTIF_ID = 1
     }
 
     inner class LocalBinder : Binder() {
         fun getService(): JammerPlaybackService = this@JammerPlaybackService
     }
 
+    override fun onBind(intent: Intent): IBinder = binder
+
+    // LIFECYCLE
+
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service onCreate started")
+        Log.d(TAG, "onCreate")
 
-        // CRITICAL: Create notification channel FIRST
         createNotificationChannel()
 
-        // CRITICAL: Call startForeground() IMMEDIATELY before any heavy work
-        // This prevents ForegroundServiceDidNotStartInTimeException
-        try {
-            val notification = buildEmptyNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build(),
+                true
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+
+        player?.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) {
+                    onTrackEnded()
+                }
             }
-            Log.d(TAG, "startForeground() called successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "startForeground() failed: ${e.message}", e)
-            // If startForeground fails, we can't be a foreground service
-            // Stop the service to avoid crash
-            stopSelf()
-            return
-        }
+        })
 
-        // Now do the heavy initialization
-        initializePlayer()
-        initializeMediaSession()
-        startPositionUpdates()
-
-        Log.d(TAG, "Service onCreate complete")
-    }
-
-    override fun onBind(intent: Intent?): IBinder {
-        return binder
+        startForeground(NOTIF_ID, buildNotification())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "onStartCommand: action=${intent?.action}")
-
-        // Ensure we're in foreground state
-        if (player?.isPlaying == true) {
-            updateNotification()
-        }
-
-        MediaButtonReceiver.handleIntent(mediaSession, intent)
-
+        Log.d(TAG, "onStartCommand: ${intent?.action}")
         when (intent?.action) {
             ACTION_PLAY_SINGLE -> {
-                val path = intent.getStringExtra("path") ?: return START_NOT_STICKY
-                playSingle(path)
+                val path = intent.getStringExtra(EXTRA_PATH)
+                if (path != null) playSingle(path)
             }
-            ACTION_PLAY_LIST -> {
-                val paths = intent.getStringArrayListExtra("paths") ?: return START_NOT_STICKY
-                val startIndex = intent.getIntExtra("startIndex", 0)
-                playTracks(paths, startIndex)
+            ACTION_SET_SHUFFLE -> {
+                val enabled = intent.getBooleanExtra("enabled", false)
+                setShuffle(enabled)
             }
-            ACTION_TOGGLE -> togglePlayPause()
-            ACTION_SKIP_NEXT -> skipToNext()
-            ACTION_SKIP_PREV -> skipToPrevious()
-            ACTION_SEEK -> {
-                val pos = intent.getLongExtra("positionMs", 0)
-                seekTo(pos)
+            ACTION_SET_REPEAT -> {
+                val modeOrdinal = intent.getIntExtra("mode", RepeatMode.NONE.ordinal)
+                setRepeat(RepeatMode.values()[modeOrdinal])
+            }
+            ACTION_CLEAR_QUEUE -> clearQueue()
+            ACTION_ADD_TO_QUEUE -> {
+                val path = intent.getStringExtra(EXTRA_PATH)
+                if (path != null) addToQueue(path)
             }
         }
-
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
-    private fun initializePlayer() {
-        Log.d(TAG, "Initializing ExoPlayer...")
-        player = ExoPlayer.Builder(this).build().apply {
-            addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(state: Int) {
-                    when (state) {
-                        Player.STATE_READY -> updateNotification()
-                        Player.STATE_ENDED -> skipToNext()
-                    }
-                }
-
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    updateNotification()
-                }
-            })
-        }
-        Log.d(TAG, "ExoPlayer initialized")
+    override fun onDestroy() {
+        Log.d(TAG, "onDestroy")
+        player?.release()
+        player = null
+        super.onDestroy()
     }
 
-    private fun initializeMediaSession() {
-        Log.d(TAG, "Initializing MediaSession...")
-        mediaSession = MediaSessionCompat(this, TAG).apply {
-            isActive = true
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() {
-                    togglePlayPause()
-                }
-
-                override fun onPause() {
-                    togglePlayPause()
-                }
-
-                override fun onSkipToNext() {
-                    skipToNext()
-                }
-
-                override fun onSkipToPrevious() {
-                    skipToPrevious()
-                }
-
-                override fun onSeekTo(pos: Long) {
-                    seekTo(pos)
-                }
-            })
-        }
-
-        mediaSessionConnector = MediaSessionConnector(mediaSession!!).apply {
-            setPlayer(player!!)
-        }
-
-        sessionToken = mediaSession!!.sessionToken
-        Log.d(TAG, "MediaSession initialized")
-    }
+    // PLAYBACK CONTROL
 
     fun playSingle(path: String) {
         Log.d(TAG, "playSingle: $path")
-        currentPlaylist = mutableListOf(path)
-        currentIndex = 0
-        player?.setMediaItem(MediaItem.fromUri(path))
-        player?.prepare()
-        player?.play()
-        updateMetadata(path)
-        updateNotification()
+        try {
+            currentPlaylist = mutableListOf(path)
+            playbackOrder = mutableListOf(0)
+            currentPlaybackIndex = 0
+            loadAndPlay(path)
+        } catch (e: Exception) {
+            Log.e(TAG, "playSingle error: ${e.message}", e)
+        }
     }
 
     fun playTracks(paths: List<String>, startIndex: Int = 0) {
         Log.d(TAG, "playTracks: ${paths.size} tracks, start=$startIndex")
-        if (paths.isEmpty()) {
-            Log.w(TAG, "playTracks called with empty list!")
-            return
+        try {
+            if (paths.isEmpty()) {
+                Log.w(TAG, "playTracks called with empty list!")
+                return
+            }
+            currentPlaylist = paths.toMutableList()
+            rebuildPlaybackOrder()
+            currentPlaybackIndex = startIndex.coerceIn(0, playbackOrder.size - 1)
+            val effectiveIndex = playbackOrder[currentPlaybackIndex]
+            val path = currentPlaylist.getOrNull(effectiveIndex) ?: return
+            loadAndPlay(path)
+        } catch (e: Exception) {
+            Log.e(TAG, "playTracks error: ${e.message}", e)
         }
-        currentPlaylist = paths.toMutableList()
-        currentIndex = startIndex.coerceIn(0, paths.size - 1)
+    }
 
-        val mediaItems = paths.map { MediaItem.fromUri(it) }
-        player?.setMediaItems(mediaItems)
-        player?.prepare()
-        player?.seekTo(currentIndex, 0)
-        player?.play()
-
-        updateMetadata(paths[currentIndex])
-        updateNotification()
+    private fun loadAndPlay(path: String) {
+        try {
+            val uri = when {
+                path.startsWith("content://") -> Uri.parse(path)
+                else -> Uri.fromFile(java.io.File(path))
+            }
+            player?.setMediaItem(MediaItem.fromUri(uri))
+            player?.prepare()
+            player?.play()
+            updateNotification()
+        } catch (e: Exception) {
+            Log.e(TAG, "loadAndPlay error: ${e.message}", e)
+        }
     }
 
     fun togglePlayPause() {
-        player?.let {
-            if (it.isPlaying) {
-                it.pause()
-            } else {
-                it.play()
+        try {
+            player?.let {
+                if (it.isPlaying) it.pause() else it.play()
             }
+            updateNotification()
+        } catch (e: Exception) {
+            Log.e(TAG, "togglePlayPause error: ${e.message}")
         }
     }
 
     fun skipToNext() {
-        if (currentPlaylist.isEmpty()) return
-        currentIndex = (currentIndex + 1) % currentPlaylist.size
-        player?.seekTo(currentIndex, 0)
-        player?.play()
-        updateMetadata(currentPlaylist[currentIndex])
-        updateNotification()
+        try {
+            if (currentPlaylist.isEmpty() || playbackOrder.isEmpty()) return
+            if (repeatMode == RepeatMode.ONE) {
+                player?.seekTo(0)
+                player?.play()
+                return
+            }
+            currentPlaybackIndex = (currentPlaybackIndex + 1) % playbackOrder.size
+            val effectiveIndex = playbackOrder[currentPlaybackIndex]
+            val path = currentPlaylist.getOrNull(effectiveIndex) ?: return
+            loadAndPlay(path)
+        } catch (e: Exception) {
+            Log.e(TAG, "skipToNext error: ${e.message}", e)
+        }
     }
 
     fun skipToPrevious() {
-        if (currentPlaylist.isEmpty()) return
-        currentIndex = if (currentIndex > 0) currentIndex - 1 else currentPlaylist.size - 1
-        player?.seekTo(currentIndex, 0)
-        player?.play()
-        updateMetadata(currentPlaylist[currentIndex])
-        updateNotification()
+        try {
+            if (currentPlaylist.isEmpty() || playbackOrder.isEmpty()) return
+            if (repeatMode == RepeatMode.ONE) {
+                player?.seekTo(0)
+                player?.play()
+                return
+            }
+            currentPlaybackIndex = if (currentPlaybackIndex > 0) {
+                currentPlaybackIndex - 1
+            } else {
+                playbackOrder.size - 1
+            }
+            val effectiveIndex = playbackOrder[currentPlaybackIndex]
+            val path = currentPlaylist.getOrNull(effectiveIndex) ?: return
+            loadAndPlay(path)
+        } catch (e: Exception) {
+            Log.e(TAG, "skipToPrevious error: ${e.message}", e)
+        }
+    }
+
+    private fun onTrackEnded() {
+        try {
+            if (currentPlaylist.isEmpty() || playbackOrder.isEmpty()) return
+            if (repeatMode == RepeatMode.ONE) {
+                player?.seekTo(0)
+                player?.play()
+                return
+            }
+            if (currentPlaybackIndex < playbackOrder.size - 1) {
+                currentPlaybackIndex++
+                val effectiveIndex = playbackOrder[currentPlaybackIndex]
+                val path = currentPlaylist.getOrNull(effectiveIndex) ?: return
+                loadAndPlay(path)
+            } else if (repeatMode == RepeatMode.ALL) {
+                currentPlaybackIndex = 0
+                val effectiveIndex = playbackOrder[0]
+                val path = currentPlaylist.getOrNull(effectiveIndex) ?: return
+                loadAndPlay(path)
+            } else {
+                player?.pause()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "onTrackEnded error: ${e.message}", e)
+        }
     }
 
     fun seekTo(positionMs: Long) {
-        player?.seekTo(positionMs)
-    }
-
-    fun getCurrentPosition(): Long = player?.currentPosition ?: 0L
-    fun getDuration(): Long = player?.duration ?: 0L
-    fun isPlaying(): Boolean = player?.isPlaying ?: false
-    fun getCurrentTrackPath(): String? = currentPlaylist.getOrNull(currentIndex)
-
-    private fun updateMetadata(path: String) {
-        val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(path)
-            val title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-                ?: File(path).nameWithoutExtension
-            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-                ?: "Unknown Artist"
-            val album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
-                ?: "Unknown Album"
-            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                ?.toLongOrNull() ?: 0L
-
-            mediaSession?.setMetadata(
-                MediaMetadataCompat.Builder()
-                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, title)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, artist)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, album)
-                    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
-                    .build()
-            )
+            player?.seekTo(positionMs)
         } catch (e: Exception) {
-            Log.e(TAG, "Metadata error: ${e.message}")
-        } finally {
-            retriever.release()
+            Log.e(TAG, "seekTo error: ${e.message}")
         }
     }
 
-    private fun updateNotification() {
+    fun stopPlayback() {
         try {
-            val notification = buildNotification()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    notification,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-                )
+            player?.stop()
+            player?.clearMediaItems()
+        } catch (e: Exception) {
+            Log.e(TAG, "stopPlayback error: ${e.message}")
+        }
+    }
+
+    // SHUFFLE & REPEAT
+
+    fun setShuffle(enabled: Boolean) {
+        try {
+            isShuffleEnabled = enabled
+            val oldEffective = playbackOrder.getOrNull(currentPlaybackIndex) ?: 0
+            rebuildPlaybackOrder()
+            currentPlaybackIndex = playbackOrder.indexOf(oldEffective).coerceAtLeast(0)
+            Log.d(TAG, "Shuffle: $enabled, order=$playbackOrder")
+        } catch (e: Exception) {
+            Log.e(TAG, "setShuffle error: ${e.message}")
+        }
+    }
+
+    fun isShuffleEnabled(): Boolean = isShuffleEnabled
+
+    fun setRepeat(mode: RepeatMode) {
+        try {
+            repeatMode = mode
+            player?.repeatMode = when (mode) {
+                RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+                RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+                RepeatMode.NONE -> Player.REPEAT_MODE_OFF
+            }
+            Log.d(TAG, "Repeat: $mode")
+        } catch (e: Exception) {
+            Log.e(TAG, "setRepeat error: ${e.message}")
+        }
+    }
+
+    fun getRepeatMode(): RepeatMode = repeatMode
+
+    // QUEUE
+
+    fun addToQueue(path: String) {
+        try {
+            currentPlaylist.add(path)
+            playbackOrder.add(currentPlaylist.size - 1)
+            Log.d(TAG, "Added to queue: $path. Size: ${currentPlaylist.size}")
+        } catch (e: Exception) {
+            Log.e(TAG, "addToQueue error: ${e.message}")
+        }
+    }
+
+    fun removeFromQueue(index: Int) {
+        try {
+            if (index < 0 || index >= currentPlaylist.size) return
+            val removedOriginalIndex = playbackOrder.getOrNull(currentPlaybackIndex) ?: -1
+            currentPlaylist.removeAt(index)
+            rebuildPlaybackOrder()
+            if (removedOriginalIndex == index) {
+                if (currentPlaybackIndex >= playbackOrder.size) currentPlaybackIndex = 0
+                if (playbackOrder.isNotEmpty()) {
+                    val eff = playbackOrder[currentPlaybackIndex]
+                    currentPlaylist.getOrNull(eff)?.let { loadAndPlay(it) }
+                }
             } else {
-                startForeground(NOTIFICATION_ID, notification)
+                currentPlaybackIndex = currentPlaybackIndex.coerceIn(0, (playbackOrder.size - 1).coerceAtLeast(0))
+            }
+            Log.d(TAG, "Removed index $index. Size: ${currentPlaylist.size}")
+        } catch (e: Exception) {
+            Log.e(TAG, "removeFromQueue error: ${e.message}")
+        }
+    }
+
+    fun clearQueue() {
+        try {
+            currentPlaylist.clear()
+            playbackOrder.clear()
+            currentPlaybackIndex = 0
+            player?.stop()
+            player?.clearMediaItems()
+            Log.d(TAG, "Queue cleared")
+        } catch (e: Exception) {
+            Log.e(TAG, "clearQueue error: ${e.message}")
+        }
+    }
+
+    fun getQueue(): List<String> = currentPlaylist.toList()
+    fun getQueueSize(): Int = currentPlaylist.size
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        try {
+            if (fromIndex == toIndex) return
+            if (fromIndex < 0 || fromIndex >= currentPlaylist.size) return
+            if (toIndex < 0 || toIndex >= currentPlaylist.size) return
+
+            val item = currentPlaylist.removeAt(fromIndex)
+            currentPlaylist.add(toIndex, item)
+            rebuildPlaybackOrder()
+
+            val currentOriginal = playbackOrder.getOrNull(currentPlaybackIndex) ?: 0
+            when {
+                fromIndex == currentOriginal -> {
+                    currentPlaybackIndex = playbackOrder.indexOf(toIndex).coerceAtLeast(0)
+                }
+                else -> {
+                    currentPlaybackIndex = playbackOrder.indexOf(currentOriginal).coerceAtLeast(0)
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "updateNotification failed: ${e.message}")
+            Log.e(TAG, "moveQueueItem error: ${e.message}")
         }
     }
+
+    // HELPERS
+
+    private fun rebuildPlaybackOrder() {
+        playbackOrder = if (isShuffleEnabled) {
+            (currentPlaylist.indices).shuffled().toMutableList()
+        } else {
+            (currentPlaylist.indices).toMutableList()
+        }
+    }
+
+    fun getCurrentPosition(): Long = try { player?.currentPosition ?: 0L } catch (e: Exception) { 0L }
+    fun getDuration(): Long = try { player?.duration ?: 0L } catch (e: Exception) { 0L }
+    fun isPlaying(): Boolean = try { player?.isPlaying ?: false } catch (e: Exception) { false }
+    fun getCurrentTrackPath(): String? = try {
+        val eff = playbackOrder.getOrNull(currentPlaybackIndex)
+        if (eff != null) currentPlaylist.getOrNull(eff) else null
+    } catch (e: Exception) { null }
+    fun getCurrentIndex(): Int = currentPlaybackIndex
+
+    // NOTIFICATION
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
+                NOTIF_CHANNEL_ID,
                 "Jammer Playback",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Media playback controls"
-                setShowBadge(false)
-            }
+            )
             val manager = getSystemService(NotificationManager::class.java)
-            manager?.createNotificationChannel(channel)
-            Log.d(TAG, "Notification channel created")
+            manager.createNotificationChannel(channel)
         }
-    }
-
-    private fun buildEmptyNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Jammer")
-            .setContentText("Ready to play")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
     }
 
     private fun buildNotification(): Notification {
-        val playPauseAction = if (player?.isPlaying == true) {
-            NotificationCompat.Action(
-                R.drawable.ic_pause,
-                "Pause",
-                PendingIntent.getService(
-                    this, 0,
-                    Intent(this, JammerPlaybackService::class.java).setAction(ACTION_TOGGLE),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            )
-        } else {
-            NotificationCompat.Action(
-                R.drawable.ic_play,
-                "Play",
-                PendingIntent.getService(
-                    this, 0,
-                    Intent(this, JammerPlaybackService::class.java).setAction(ACTION_TOGGLE),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            )
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-
-        val contentIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(mediaSession?.controller?.metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: "Jammer")
-            .setContentText(mediaSession?.controller?.metadata?.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: "Unknown")
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentIntent(contentIntent)
+        return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
+            .setContentTitle("Jammer")
+            .setContentText("Playing music")
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .addAction(R.drawable.ic_prev, "Previous", PendingIntent.getService(this, 1, Intent(this, JammerPlaybackService::class.java).setAction(ACTION_SKIP_PREV), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-            .addAction(playPauseAction)
-            .addAction(R.drawable.ic_next, "Next", PendingIntent.getService(this, 2, Intent(this, JammerPlaybackService::class.java).setAction(ACTION_SKIP_NEXT), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-            .setStyle(androidx.media.app.NotificationCompat.MediaStyle()
-                .setMediaSession(mediaSession?.sessionToken)
-                .setShowActionsInCompactView(1))
             .build()
     }
 
-    private fun startPositionUpdates() {
-        positionRunnable = object : Runnable {
-            override fun run() {
-                player?.let {
-                    mediaSession?.setPlaybackState(
-                        PlaybackStateCompat.Builder()
-                            .setState(
-                                if (it.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
-                                it.currentPosition, 1f
-                            )
-                            .setActions(
-                                PlaybackStateCompat.ACTION_PLAY or
-                                PlaybackStateCompat.ACTION_PAUSE or
-                                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                                PlaybackStateCompat.ACTION_SEEK_TO
-                            )
-                            .build()
-                    )
-                }
-                positionHandler.postDelayed(this, 1000)
-            }
-        }
-        positionHandler.postDelayed(positionRunnable!!, 1000)
-    }
-
-    override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot? {
-        return BrowserRoot("root", null)
-    }
-
-    override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
-        result.sendResult(mutableListOf())
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        positionRunnable?.let { positionHandler.removeCallbacks(it) }
-        mediaSession?.release()
-        player?.release()
-        Log.d(TAG, "Service destroyed")
+    private fun updateNotification() {
+        // TODO: atualizar com título/artista da música atual
+        startForeground(NOTIF_ID, buildNotification())
     }
 }

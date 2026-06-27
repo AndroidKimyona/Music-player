@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/queueItemRoot"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="10dp"
+    android:gravity="center_vertical"
+    android:background="?attr/selectableItemBackground">
+
+    <!-- Número da posição -->
+    <TextView
+        android:id="@+id/tvQueueNumber"
+        android:layout_width="32dp"
+        android:layout_height="wrap_content"
+        android:text="1"
+        android:textSize="14sp"
+        android:textColor="#888888"
+        android:gravity="center" />
+
+    <!-- Album Art -->
+    <ImageView
+        android:id="@+id/ivQueueCover"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/album_placeholder"
+        android:scaleType="centerCrop"
+        android:layout_marginStart="8dp" />
+
+    <!-- Track Info -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="12dp">
+
+        <TextView
+            android:id="@+id/tvQueueTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Title"
+            android:textSize="15sp"
+            android:textColor="#FFFFFF"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <TextView
+            android:id="@+id/tvQueueArtist"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Artist"
+            android:textSize="12sp"
+            android:textColor="#888888"
+            android:maxLines="1" />
+    </LinearLayout>
+
+    <!-- Duration -->
+    <TextView
+        android:id="@+id/tvQueueDuration"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="0:00"
+        android:textSize="12sp"
+        android:textColor="#888888"
+        android:layout_marginEnd="8dp" />
+
+    <!-- Drag handle -->
+    <ImageButton
+        android:id="@+id/btnDragHandle"
+        android:layout_width="36dp"
+        android:layout_height="36dp"
+        android:src="@drawable/ic_drag_handle"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        app:tint="#555555"
+        android:contentDescription="Drag to reorder" />
+
+</LinearLayout>
